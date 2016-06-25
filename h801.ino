@@ -1,4 +1,12 @@
+//
+// Alternative firmware for H801 5 channel LED dimmer
+// based on https://eryk.io/2015/10/esp8266-based-wifi-rgb-controller-h801/
+//
 #include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>   // Local WebServer used to serve the configuration portal
+#include <WiFiManager.h>        // WiFi Configuration Magic
+
+WiFiManager wifiManager;
 
 void LED_RED();
 void LED_GREEN();
@@ -21,7 +29,6 @@ int gamma_table[PWM_VALUE+1] = {
 #define redPIN    15 //12
 #define greenPIN  13 //15
 #define bluePIN   12 //13
-
 
 // W FET
 #define w1PIN     14
@@ -61,9 +68,6 @@ int BLUE_A = 0;
 int W1_A = 0;
 int W2_A = 0;
 
-const char *ssid =  "Network Name";
-const char *pass =  "p4ssw0rd"; 
-
 // Start WiFi Server
 WiFiServer server(80);
 
@@ -87,18 +91,15 @@ void setup()
 
   //client.set_callback(callback);
 
-  WiFi.begin(ssid, pass);
-
+  LED2off;
   LEDon;
-  
-  while (WiFi.status() != WL_CONNECTED) {
 
-    LED2off;
-    delay(500);
-    Serial1.print(".");
-    LED2on;
-  }
-  
+
+  wifiManager.setTimeout(3600);
+  wifiManager.autoConnect();
+
+  LEDoff;
+ 
   Serial1.println("");
   
   Serial1.println("WiFi connected");
