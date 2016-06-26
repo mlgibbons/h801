@@ -25,19 +25,19 @@ int gamma_table[PWM_VALUE+1] = {
 };
 
 
-// RGB FET
-#define redPIN    15 //12
-#define greenPIN  13 //15
-#define bluePIN   12 //13
+// RGB for Witty Cloud
+#define redPIN    15
+#define greenPIN  12
+#define bluePIN   13
 
 // W FET
-#define w1PIN     14
-#define w2PIN     4
+#define w1PIN     16
+#define w2PIN     14
 
 // onbaord green LED D1
-#define LEDPIN    5
+#define LEDPIN    2
 // onbaord red LED D2
-#define LED2PIN   1
+#define LED2PIN   2
 
 // note 
 // TX GPIO2 @Serial1 (Serial ONE)
