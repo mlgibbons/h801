@@ -8,7 +8,7 @@
 #include <ESP8266WebServer.h>   // Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>        // WiFi Configuration Magic
 #include <ESP8266SSDP.h>
-
+#include <ArduinoJson.h>
 
 void LED_RED();
 void LED_GREEN();
@@ -27,19 +27,19 @@ int gamma_table[PWM_VALUE + 1] = {
 };
 
 
-// RGB FET
-#define redPIN    15 //12
-#define greenPIN  13 //15
-#define bluePIN   12 //13
+// RGB for Witty Cloud
+#define redPIN    15
+#define greenPIN  12
+#define bluePIN   13
 
 // W FET
-#define w1PIN     14
-#define w2PIN     4
+#define w1PIN     16
+#define w2PIN     14
 
 // onbaord green LED D1
-#define LEDPIN    5
+#define LEDPIN    2
 // onbaord red LED D2
-#define LED2PIN   1
+#define LED2PIN   2
 
 // note
 // TX GPIO2 @Serial1 (Serial ONE)
@@ -51,6 +51,8 @@ int gamma_table[PWM_VALUE + 1] = {
 
 #define LED2off digitalWrite(LED2PIN,HIGH)
 #define LED2on digitalWrite(LED2PIN,LOW)
+
+#define SERIAL "001788102201"
 
 int led_delay_red = 0;
 int led_delay_green = 0;
@@ -82,15 +84,153 @@ ESP8266WebServer server(80);
 
 
 void handleDescription() {
-  String str = "<root><specVersion><major>1</major><minor>0</minor></specVersion><URLBase>http://" + ipString + ":80/</URLBase><device><deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType><friendlyName>Philips hue (" + ipString + ")</friendlyName><manufacturer>Royal Philips Electronics</manufacturer><manufacturerURL>http://www.philips.com</manufacturerURL><modelDescription>Philips hue Personal Wireless Lighting</modelDescription><modelName>Philips hue bridge 2012</modelName><modelNumber>929000226503</modelNumber><modelURL>http://www.meethue.com</modelURL><serialNumber>00178817122c</serialNumber><UDN>uuid:2f402f80-da50-11e1-9b23-00178817122c</UDN><presentationURL>index.html</presentationURL><iconList><icon><mimetype>image/png</mimetype><height>48</height><width>48</width><depth>24</depth><url>hue_logo_0.png</url></icon><icon><mimetype>image/png</mimetype><height>120</height><width>120</width><depth>24</depth><url>hue_logo_3.png</url></icon></iconList></device></root>";
-  server.send(200, "text/plain", str);
+  String str = "<root> \
+    <specVersion><major>1</major><minor>0</minor></specVersion>\
+    <URLBase>http://" + ipString + ":80/</URLBase>\
+    <device>\
+      <deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType>\
+      <friendlyName>Philips hue (" + ipString + ")</friendlyName>\
+      <manufacturer>Royal Philips Electronics</manufacturer>\
+      <manufacturerURL>http://www.philips.com</manufacturerURL>\
+      <modelDescription>Philips hue Personal Wireless Lighting</modelDescription>\
+      <modelName>Philips hue bridge 2012</modelName>\
+      <modelNumber>929000226503</modelNumber>\
+      <modelURL>http://www.meethue.com</modelURL>\
+      <serialNumber>SERIAL</serialNumber>\
+      <UDN>uuid:2f402f80-da50-11e1-9b23-00178817122c</UDN>\
+      <presentationURL>index.html</presentationURL>\
+      <iconList>\
+         <icon><mimetype>image/png</mimetype><height>48</height><width>48</width><depth>24</depth><url>hue_logo_0.png</url></icon>\
+        <icon><mimetype>image/png</mimetype><height>120</height><width>120</width><depth>24</depth><url>hue_logo_3.png</url></icon>\
+       </iconList>\
+      </device></root>";
+  server.send(200, "text/xml", str);
   Serial.println(str);
 }
 
+void handleApiPost() {
+
+  Serial.println("URI: " + server.uri());
+
+  boolean isAuthorized = true; // FIXME: Instead, we should persist (save) the username and put it on the whitelist
+  String client = "Test";
+  Serial.println("CLIENT: ");
+  Serial.println(client);
+
+  String str = "[{\"success\":{\"username\": \"1028d66426293e821ecfd9ef1a0731df\"}}]";
+  server.send(200, "text/json", str);
+  Serial.println(str);
+}
+
+void handleOther() {
+
+  Serial.println("URI: " + server.uri());
+
+  if (server.uri().startsWith("/api/")) {
+    String json = apiFull();
+    Serial.println(json);
+    server.send(200, "text/json", json);
+  } else {
+    server.send(500, "text/plain", "Unknown request");
+  }
+}
+
+String apiFull() {
+  DynamicJsonBuffer  jsonBuffer;
+  JsonObject& base = jsonBuffer.createObject();
+  JsonObject& lights = base.createNestedObject("lights");
+  addApiLights(lights);
+  JsonObject& config = base.createNestedObject("config");
+  addApiConfig(config);
+
+  char buffer[1024];
+  base.printTo(buffer, sizeof(buffer));
+  String res = String(buffer);
+  return res;
+}
+
+
+void addApiLights(JsonObject& lights) {
+  int i;
+  for (i = 1; i <= 1; i++) {
+    JsonObject& l = lights.createNestedObject("1");
+    JsonObject& state = l.createNestedObject("state");
+    state["on"] = false;
+    state["bri"] = 0;
+    state["hue"] = 0;
+    state["sat"] = 0;
+    JsonArray& xy = state.createNestedArray("xy");
+    xy.add(0);
+    xy.add(0);
+    state["ct"] = 0;
+    state["alert"] = "none";
+    state["effect"] = "none";
+    state["colormode"] = "hs";
+    state["reachable"] = true;
+    l["type"] = "Extended color light";
+    l["name"] = "RGB";
+    l["modelid"] = "H801";
+    l["swversion"] = "10000000";
+    JsonObject& ps = l.createNestedObject("pointsymbol");
+    ps["1"] = "None";
+    ps["2"] = "None";
+    ps["3"] = "None";
+    ps["4"] = "None";
+    ps["5"] = "None";
+    ps["6"] = "None";
+    ps["7"] = "None";
+    ps["8"] = "None";
+  }
+}
+
+void addApiConfig(JsonObject& config) {
+  config["name"] = "H801";
+  config["mac"] = macString;
+  config["dhcp"] = true;
+  config["ipaddress"] = ipString;
+  config["gateway"] = gatewayString;
+  config["netmask"] = netmaskString;
+}
+
+
+
+//   "lights": {
+//    "1": {
+//      "state": {
+//        "on": false,
+//        "bri": 0,
+//        "hue": 0,
+//        "sat": 0,
+//        "xy": [0.0000, 0.0000],
+//        "ct": 0,
+//        "alert": "none",
+//        "effect": "none",
+//        "colormode": "hs",
+//        "reachable": true
+//      },
+//      "type": "Extended color light",
+//      "name": "Hue Lamp 1",
+//      "modelid": "LCT001",
+//      "swversion": "65003148",
+//      "pointsymbol": {
+//        "1": "none",
+//        "2": "none",
+//        "3": "none",
+//        "4": "none",
+//        "5": "none",
+//        "6": "none",
+//        "7": "none",
+//        "8": "none"
+//      }
+//    },
 
 void setup()
 {
+  // Setup console
+  Serial.begin(115200);
+  Serial.println("Starting up");
 
+  // Configure GPIOs
   pinMode(LEDPIN, OUTPUT);
   pinMode(LED2PIN, OUTPUT);
 
@@ -99,14 +239,6 @@ void setup()
   pinMode(bluePIN, OUTPUT);
   pinMode(w1PIN, OUTPUT);
   pinMode(w2PIN, OUTPUT);
-
-  // Setup console
-  Serial1.begin(115200);
-  delay(10);
-  Serial1.println();
-  Serial1.println();
-
-  //client.set_callback(callback);
 
   LED2off;
   LEDon;
@@ -121,31 +253,37 @@ void setup()
 
   LEDoff;
 
-  Serial1.println("");
+  Serial.println("");
 
-  Serial1.println("WiFi connected");
-  Serial1.println("IP address: ");
-  Serial1.println(WiFi.localIP());
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
 
-  Serial.printf("Starting SSDP...\n");
-  SSDP.begin();
+  Serial.println("Starting SSDP...");
   SSDP.setSchemaURL((char*)"description.xml");
   SSDP.setHTTPPort(80);
-  SSDP.setName((char*)"H801 hue clone");
-  SSDP.setSerialNumber((char*)"001788102201");
+  SSDP.setName((char*)"Philips hue clone (H801)");
+  SSDP.setSerialNumber((char*)SERIAL);
   SSDP.setURL((char*)"index.html");
   SSDP.setModelName((char*)"Philips hue bridge 2012");
   SSDP.setModelNumber((char*)"929000226503");
   SSDP.setModelURL((char*)"http://www.meethue.com");
   SSDP.setManufacturer((char*)"Royal Philips Electronics");
   SSDP.setManufacturerURL((char*)"http://www.philips.com");
+  SSDP.begin();
   Serial.println("SSDP Started");
 
-  Serial1.println("");
+  Serial.println("");
 
   server.on("/description.xml", HTTP_GET, handleDescription);
+  server.on("/api", HTTP_POST, handleApiPost);
+  server.on("/index.txt", HTTP_GET, []() {
+    server.send(200, "text/plain", "Hello World!");
+  });
+  server.onNotFound(handleOther);
+
   server.begin();
-  Serial1.println("Webserver started");
+  Serial.println("Webserver started");
 
 }
 
@@ -171,100 +309,3 @@ String StringIPaddress(IPAddress myaddr)
 }
 
 
-
-//
-// LED code
-//
-
-void change_LED()
-{
-  int diff_red = abs(RED - RED_A);
-  if (diff_red > 0) {
-    led_delay_red = time_at_colour / abs(RED - RED_A);
-  } else {
-    led_delay_red = time_at_colour / 1023;
-  }
-
-  int diff_green = abs(GREEN - GREEN_A);
-  if (diff_green > 0) {
-    led_delay_green = time_at_colour / abs(GREEN - GREEN_A);
-  } else {
-    led_delay_green = time_at_colour / 1023;
-  }
-
-  int diff_blue = abs(BLUE - BLUE_A);
-  if (diff_blue > 0) {
-    led_delay_blue = time_at_colour / abs(BLUE - BLUE_A);
-  } else {
-    led_delay_blue = time_at_colour / 1023;
-  }
-
-  int diff_w1 = abs(W1 - W1_A);
-  if (diff_w1 > 0) {
-    led_delay_w1 = time_at_colour / abs(W1 - W1_A);
-  } else {
-    led_delay_w1 = time_at_colour / 1023;
-  }
-
-  int diff_w2 = abs(W2 - W2_A);
-  if (diff_w2 > 0) {
-    led_delay_w2 = time_at_colour / abs(W2 - W2_A);
-  } else {
-    led_delay_w2 = time_at_colour / 1023;
-  }
-}
-
-void LED_RED()
-{
-  if (RED != RED_A) {
-    if (RED_A > RED) RED_A = RED_A - 1;
-    if (RED_A < RED) RED_A++;
-    analogWrite(redPIN, RED_A);
-  }
-}
-
-void LED_GREEN()
-{
-  if (GREEN != GREEN_A) {
-    if (GREEN_A > GREEN) GREEN_A = GREEN_A - 1;
-    if (GREEN_A < GREEN) GREEN_A++;
-    analogWrite(greenPIN, GREEN_A);
-  }
-}
-
-void LED_BLUE()
-{
-  if (BLUE != BLUE_A) {
-    if (BLUE_A > BLUE) BLUE_A = BLUE_A - 1;
-    if (BLUE_A < BLUE) BLUE_A++;
-    analogWrite(bluePIN, BLUE_A);
-  }
-}
-
-void LED_W1()
-{
-  if (W1 != W1_A) {
-    if (W1_A > W1) W1_A = W1_A - 1;
-    if (W1_A < W1) W1_A++;
-    analogWrite(w1PIN, W1_A);
-  }
-}
-
-void LED_W2()
-{
-  if (W2 != W2_A) {
-    if (W2_A > W2) W2_A = W2_A - 1;
-    if (W2_A < W2) W2_A++;
-    analogWrite(w2PIN, W2_A);
-  }
-}
-
-int convertToInt(char upper, char lower)
-{
-  int uVal = (int)upper;
-  int lVal = (int)lower;
-  uVal = uVal > 64 ? uVal - 55 : uVal - 48;
-  uVal = uVal << 4;
-  lVal = lVal > 64 ? lVal - 55 : lVal - 48;
-  return uVal + lVal;
-}
