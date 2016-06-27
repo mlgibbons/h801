@@ -122,6 +122,8 @@ String apiFull() {
   addApiLights(lights);
   JsonObject& config = base.createNestedObject("config");
   addApiConfig(config);
+  JsonObject& groups = base.createNestedObject("goups");
+  JsonObject& schedules = base.createNestedObject("schedules");
 
   char buffer[1024];
   base.printTo(buffer, sizeof(buffer));
@@ -231,7 +233,6 @@ void loop()
 {
   server.handleClient();
 }
-
 
 
 //
