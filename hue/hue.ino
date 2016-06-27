@@ -10,6 +10,8 @@
 #include <ESP8266SSDP.h>
 #include <ArduinoJson.h>
 
+#include "WittyCloud.h"
+
 void LED_RED();
 void LED_GREEN();
 void LED_BLUE();
@@ -19,32 +21,6 @@ void change_LED();
 int convertToInt(char upper, char lower);
 
 #define PWM_VALUE 63
-int gamma_table[PWM_VALUE + 1] = {
-  0, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 9, 10,
-  11, 12, 13, 15, 17, 19, 21, 23, 26, 29, 32, 36, 40, 44, 49, 55,
-  61, 68, 76, 85, 94, 105, 117, 131, 146, 162, 181, 202, 225, 250,
-  279, 311, 346, 386, 430, 479, 534, 595, 663, 739, 824, 918, 1023
-};
-
-
-// RGB for Witty Cloud
-#define redPIN    15
-#define greenPIN  12
-#define bluePIN   13
-
-// W FET
-#define w1PIN     16
-#define w2PIN     14
-
-// onbaord green LED D1
-#define LEDPIN    2
-// onbaord red LED D2
-#define LED2PIN   2
-
-// note
-// TX GPIO2 @Serial1 (Serial ONE)
-// RX GPIO3 @Serial
-
 
 #define LEDoff digitalWrite(LEDPIN,HIGH)
 #define LEDon digitalWrite(LEDPIN,LOW)
@@ -52,7 +28,7 @@ int gamma_table[PWM_VALUE + 1] = {
 #define LED2off digitalWrite(LED2PIN,HIGH)
 #define LED2on digitalWrite(LED2PIN,LOW)
 
-#define SERIAL "001788102201"
+#define SERIALNUMBER "001788102201"
 
 int led_delay_red = 0;
 int led_delay_green = 0;
@@ -81,8 +57,6 @@ String gatewayString;
 WiFiManager wifiManager;
 ESP8266WebServer server(80);
 
-
-
 void handleDescription() {
   String str = "<root> \
     <specVersion><major>1</major><minor>0</minor></specVersion>\
@@ -96,7 +70,7 @@ void handleDescription() {
       <modelName>Philips hue bridge 2012</modelName>\
       <modelNumber>929000226503</modelNumber>\
       <modelURL>http://www.meethue.com</modelURL>\
-      <serialNumber>SERIAL</serialNumber>\
+      <serialNumber>SERIALNUMBER</serialNumber>\
       <UDN>uuid:2f402f80-da50-11e1-9b23-00178817122c</UDN>\
       <presentationURL>index.html</presentationURL>\
       <iconList>\
@@ -105,33 +79,39 @@ void handleDescription() {
        </iconList>\
       </device></root>";
   server.send(200, "text/xml", str);
-  Serial.println(str);
 }
 
 void handleApiPost() {
-
-  Serial.println("URI: " + server.uri());
-
-  boolean isAuthorized = true; // FIXME: Instead, we should persist (save) the username and put it on the whitelist
-  String client = "Test";
-  Serial.println("CLIENT: ");
-  Serial.println(client);
-
+  SERIAL.println("URI: " + server.uri());
   String str = "[{\"success\":{\"username\": \"1028d66426293e821ecfd9ef1a0731df\"}}]";
   server.send(200, "text/json", str);
-  Serial.println(str);
 }
 
 void handleOther() {
 
-  Serial.println("URI: " + server.uri());
+  String uri = server.uri();
 
-  if (server.uri().startsWith("/api/")) {
-    String json = apiFull();
-    Serial.println(json);
-    server.send(200, "text/json", json);
+  if (server.method() == HTTP_GET) {
+    if (uri.startsWith("/api/")) {
+      String json = apiFull();
+      SERIAL.println(json);
+      server.send(200, "text/json", json);
+    } else {
+      server.send(500, "text/plain", "Unknown request");
+    }
+  } else if (server.method() == HTTP_POST) {
+    SERIAL.println("Post to "+server.uri());
+  } else if (server.method() == HTTP_PUT) {
+    if ((uri.endsWith("/state")) && (uri.indexOf("/lights/") > 0)) {
+      int p1=uri.lastIndexOf("/lights/")+8;
+      int p2=uri.lastIndexOf("/state");
+      String lightid = uri.substring(p1,p2);
+      SERIAL.println("Put for light id "+lightid);
+      SERIAL.print(server.arg(0));
+      
+    }
   } else {
-    server.send(500, "text/plain", "Unknown request");
+    SERIAL.println("Unknown method to "+server.uri());
   }
 }
 
@@ -171,15 +151,6 @@ void addApiLights(JsonObject& lights) {
     l["name"] = "RGB";
     l["modelid"] = "H801";
     l["swversion"] = "10000000";
-    JsonObject& ps = l.createNestedObject("pointsymbol");
-    ps["1"] = "None";
-    ps["2"] = "None";
-    ps["3"] = "None";
-    ps["4"] = "None";
-    ps["5"] = "None";
-    ps["6"] = "None";
-    ps["7"] = "None";
-    ps["8"] = "None";
   }
 }
 
@@ -193,42 +164,11 @@ void addApiConfig(JsonObject& config) {
 }
 
 
-
-//   "lights": {
-//    "1": {
-//      "state": {
-//        "on": false,
-//        "bri": 0,
-//        "hue": 0,
-//        "sat": 0,
-//        "xy": [0.0000, 0.0000],
-//        "ct": 0,
-//        "alert": "none",
-//        "effect": "none",
-//        "colormode": "hs",
-//        "reachable": true
-//      },
-//      "type": "Extended color light",
-//      "name": "Hue Lamp 1",
-//      "modelid": "LCT001",
-//      "swversion": "65003148",
-//      "pointsymbol": {
-//        "1": "none",
-//        "2": "none",
-//        "3": "none",
-//        "4": "none",
-//        "5": "none",
-//        "6": "none",
-//        "7": "none",
-//        "8": "none"
-//      }
-//    },
-
 void setup()
 {
   // Setup console
-  Serial.begin(115200);
-  Serial.println("Starting up");
+  SERIAL.begin(115200);
+  SERIAL.println("Starting up");
 
   // Configure GPIOs
   pinMode(LEDPIN, OUTPUT);
@@ -253,17 +193,17 @@ void setup()
 
   LEDoff;
 
-  Serial.println("");
+  SERIAL.println("");
 
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  SERIAL.println("WiFi connected");
+  SERIAL.println("IP address: ");
+  SERIAL.println(WiFi.localIP());
 
-  Serial.println("Starting SSDP...");
+  SERIAL.println("Starting SSDP...");
   SSDP.setSchemaURL((char*)"description.xml");
   SSDP.setHTTPPort(80);
   SSDP.setName((char*)"Philips hue clone (H801)");
-  SSDP.setSerialNumber((char*)SERIAL);
+  SSDP.setSerialNumber((char*)"SERIALNUMBER");
   SSDP.setURL((char*)"index.html");
   SSDP.setModelName((char*)"Philips hue bridge 2012");
   SSDP.setModelNumber((char*)"929000226503");
@@ -271,9 +211,9 @@ void setup()
   SSDP.setManufacturer((char*)"Royal Philips Electronics");
   SSDP.setManufacturerURL((char*)"http://www.philips.com");
   SSDP.begin();
-  Serial.println("SSDP Started");
+  SERIAL.println("SSDP Started");
 
-  Serial.println("");
+  SERIAL.println("");
 
   server.on("/description.xml", HTTP_GET, handleDescription);
   server.on("/api", HTTP_POST, handleApiPost);
@@ -283,7 +223,7 @@ void setup()
   server.onNotFound(handleOther);
 
   server.begin();
-  Serial.println("Webserver started");
+  SERIAL.println("Webserver started");
 
 }
 
