@@ -1,0 +1,6 @@
+- implement color format conversions
+- implement transitions
+- implement schedules
+- implement sensors
+- implement modification of configuration
+
