@@ -30,24 +30,6 @@ int convertToInt(char upper, char lower);
 
 #define SERIALNUMBER "001788102201"
 
-int led_delay_red = 0;
-int led_delay_green = 0;
-int led_delay_blue = 0;
-int led_delay_w1 = 0;
-int led_delay_w2 = 0;
-#define time_at_colour 1300
-unsigned long TIME_LED_RED = 0;
-unsigned long TIME_LED_GREEN = 0;
-unsigned long TIME_LED_BLUE = 0;
-unsigned long TIME_LED_W1 = 0;
-unsigned long TIME_LED_W2 = 0;
-int RED, GREEN, BLUE, W1, W2;
-int RED_A = 0;
-int GREEN_A = 0;
-int BLUE_A = 0;
-int W1_A = 0;
-int W2_A = 0;
-
 byte mac[6]; // MAC address
 String macString;
 String ipString;
@@ -56,6 +38,20 @@ String gatewayString;
 
 WiFiManager wifiManager;
 ESP8266WebServer server(80);
+
+struct s_settings {
+  uint16_t hue = 0;
+  uint16_t sat = 0;
+  uint16_t bri = 0;
+  uint16_t ct = 0;
+  uint16_t r = 0;
+  uint16_t g = 0;
+  uint16_t b = 0;
+  bool on=true;
+  char colormode[3]="hs";
+  char serial[13] = SERIALNUMBER;
+};
+s_settings settings;
 
 void handleDescription() {
   String str = "<root> \
@@ -88,7 +84,7 @@ void handleApiPost() {
 }
 
 void handleOther() {
-
+  DynamicJsonBuffer  jsonBuffer;
   String uri = server.uri();
 
   if (server.method() == HTTP_GET) {
@@ -100,18 +96,30 @@ void handleOther() {
       server.send(500, "text/plain", "Unknown request");
     }
   } else if (server.method() == HTTP_POST) {
-    SERIAL.println("Post to "+server.uri());
+    SERIAL.println("Post to " + server.uri());
   } else if (server.method() == HTTP_PUT) {
     if ((uri.endsWith("/state")) && (uri.indexOf("/lights/") > 0)) {
-      int p1=uri.lastIndexOf("/lights/")+8;
-      int p2=uri.lastIndexOf("/state");
-      String lightid = uri.substring(p1,p2);
-      SERIAL.println("Put for light id "+lightid);
-      SERIAL.print(server.arg(0));
+      int p1 = uri.lastIndexOf("/lights/") + 8;
+      int p2 = uri.lastIndexOf("/state");
+      String lightid = uri.substring(p1, p2);
+      SERIAL.println(server.arg(0));
       
+      JsonObject& root = jsonBuffer.parseObject(server.arg(0));
+      int hue = root["hue"];
+      int sat = root["sat"];
+      int ct = root["ct"];
+      int bri = root["bri"];
+      bool on = root["on"];
+
+      if ((hue != 0) && (sat != 0)) {
+        
+      }
+
+      SERIAL.print(hue);
+      SERIAL.print(sat);
     }
   } else {
-    SERIAL.println("Unknown method to "+server.uri());
+    SERIAL.println("Unknown method to " + server.uri());
   }
 }
 
@@ -137,10 +145,10 @@ void addApiLights(JsonObject& lights) {
   for (i = 1; i <= 1; i++) {
     JsonObject& l = lights.createNestedObject("1");
     JsonObject& state = l.createNestedObject("state");
-    state["on"] = false;
-    state["bri"] = 0;
-    state["hue"] = 0;
-    state["sat"] = 0;
+    state["on"] = settings.on;
+    state["bri"] = settings.bri;
+    state["hue"] = settings.hue;
+    state["sat"] = settings.sat;
     JsonArray& xy = state.createNestedArray("xy");
     xy.add(0);
     xy.add(0);
@@ -233,6 +241,8 @@ void loop()
 {
   server.handleClient();
 }
+
+
 
 
 //
