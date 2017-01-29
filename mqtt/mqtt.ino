@@ -28,7 +28,7 @@ const char* mqtt_server = "192.168.0.57";
 
 // Password for update server
 const char* username = "admin";
-const char* password = "charlie";
+const char* password = "";
 
 // MQTT topics
 // state, brightness, rgb
@@ -232,7 +232,7 @@ void setup()
 
   // OTA
   // do not start OTA server if no password has been set
-  if (password != "") {
+  if ((strlen!=NULL) && (strlen(password)!=0)) {
     MDNS.begin(myhostname);
     httpUpdater.setup(&httpServer,username,password);
     httpServer.begin();
