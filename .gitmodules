@@ -1,0 +1,6 @@
+[submodule "libraries/pubsubclient"]
+	path = libraries/pubsubclient
+	url = https://github.com/mlgibbons/pubsubclient.git
+[submodule "libraries/WiFiManager"]
+	path = libraries/WiFiManager
+	url = https://github.com/mlgibbons/WiFiManager.git

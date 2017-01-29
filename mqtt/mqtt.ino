@@ -17,48 +17,55 @@
 
 WiFiManager wifiManager;
 WiFiClient wifiClient;
-PubSubClient client(wifiClient);
+PubSubClient mqttClient(wifiClient);
 ESP8266WebServer httpServer(80);
 ESP8266HTTPUpdateServer httpUpdater;
 
-const char* mqtt_server = "192.168.1.89";
+bool greenLEDState;
+bool redLEDState;
+
+const char* mqtt_server = "192.168.0.57";
+
 // Password for update server
 const char* username = "admin";
-const char* password = "";
+const char* password = "charlie";
 
 // MQTT topics
 // state, brightness, rgb
-const char* MQTT_UP = "active";
-char* MQTT_LIGHT_RGB_STATE_TOPIC = "XXXXXXXX/rgb/light/status";
-char* MQTT_LIGHT_RGB_COMMAND_TOPIC = "XXXXXXXX/rgb/light/switch";
-char* MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC = "XXXXXXXX/rgb/brightness/status";
-char* MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC = "XXXXXXXX/rgb/brightness/set";
-char* MQTT_LIGHT_RGB_RGB_STATE_TOPIC = "XXXXXXXX/rgb/rgb/status";
-char* MQTT_LIGHT_RGB_RGB_COMMAND_TOPIC = "XXXXXXXX/rgb/rgb/set";
+const char* MQTT_TOPIC_PREFIX = "devices";
 
-char* MQTT_LIGHT_W1_STATE_TOPIC = "XXXXXXXX/w1/light/status";
-char* MQTT_LIGHT_W1_COMMAND_TOPIC = "XXXXXXXX/w1/light/switch";
-char* MQTT_LIGHT_W1_BRIGHTNESS_STATE_TOPIC = "XXXXXXXX/w1/brightness/status";
-char* MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC = "XXXXXXXX/w1/brightness/set";
+#define MAX_TOPIC_SIZE 64
+char MQTT_UP_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_RGB_STATE_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_RGB_COMMAND_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_RGB_COLOUR_STATE_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_RGB_COLOUR_COMMAND_TOPIC[MAX_TOPIC_SIZE];
 
-char* MQTT_LIGHT_W2_STATE_TOPIC = "XXXXXXXX/w2/light/status";
-char* MQTT_LIGHT_W2_COMMAND_TOPIC = "XXXXXXXX/w2/light/switch";
-char* MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC = "XXXXXXXX/w2/brightness/status";
-char* MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC = "XXXXXXXX/w2/brightness/set";
+char MQTT_LIGHT_W1_STATE_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_W1_COMMAND_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_W1_BRIGHTNESS_STATE_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC[MAX_TOPIC_SIZE];
+
+char MQTT_LIGHT_W2_STATE_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_W2_COMMAND_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC[MAX_TOPIC_SIZE];
 
 char* chip_id = "00000000";
-char* myhostname = "esp00000000";
+char* myhostname = "H801-00000000";
+
+char deviceId[32] = "H801";
 
 // buffer used to send/receive data with MQTT
 const uint8_t MSG_BUFFER_SIZE = 20;
 char m_msg_buffer[MSG_BUFFER_SIZE];
 
-
 // Light
 // the payload that represents enabled/disabled state, by default
 const char* LIGHT_ON = "ON";
 const char* LIGHT_OFF = "OFF";
-
 
 #define RGB_LIGHT_RED_PIN    15
 #define RGB_LIGHT_GREEN_PIN  13
@@ -82,8 +89,51 @@ uint8_t m_w1_brightness = 255;
 boolean m_w2_state = false;
 uint8_t m_w2_brightness = 255;
 
+// Useful buffer and function for logging
+#define LOG_MSG_BUFFER_SIZE 64
+char logMsgBuffer[64];
+void logMsg(char* msg) {
+    Serial1.println(msg);
+}
+
+// Wrapper around debug LEDs
+void setRedLEDOn(bool onState) {
+    digitalWrite(RED_PIN, onState ? 0 : 1);
+    redLEDState = onState;
+}
+
+void setGreenLEDOn(bool onState) {
+    digitalWrite(GREEN_PIN, onState ? 0 : 1);
+    greenLEDState = onState;
+}
+
+void flashDebugLED(int pin, int numTimes, bool currentOnState) 
+{    
+    for (int i=0; i<numTimes; i++)  {
+        digitalWrite(pin, currentOnState ? 1 : 0);  
+        delay(100);
+        digitalWrite(pin, currentOnState ? 0: 1);
+        delay(100);
+    }
+}
+
+void flashGreenLED(int numTimes) {
+    flashDebugLED(GREEN_PIN, numTimes, greenLEDState);
+}
+
+void flashRedLED(int numTimes) {
+    flashDebugLED(RED_PIN, numTimes, redLEDState);
+}
+
 void setup()
 {
+  // Setup console
+  Serial1.begin(57600);
+  delay(10);
+
+  logMsg("");
+  logMsg("Setting up");
+
   pinMode(RGB_LIGHT_RED_PIN, OUTPUT);
   pinMode(RGB_LIGHT_GREEN_PIN, OUTPUT);
   pinMode(RGB_LIGHT_BLUE_PIN, OUTPUT);
@@ -95,17 +145,21 @@ void setup()
 
   pinMode(GREEN_PIN, OUTPUT);
   pinMode(RED_PIN, OUTPUT);
-  digitalWrite(RED_PIN, 0);
-  digitalWrite(GREEN_PIN, 1);
+  setRedLEDOn(false);
+  setGreenLEDOn(false);
 
   sprintf(chip_id, "%08X", ESP.getChipId());
-  sprintf(myhostname, "esp%08X", ESP.getChipId());
+  sprintf(myhostname, "H801-%08X", ESP.getChipId());
+  snprintf(deviceId, sizeof(deviceId), "H801-%s", chip_id);
 
-  // Setup console
-  Serial1.begin(115200);
-  delay(10);
-  Serial1.println();
-  Serial1.println();
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Chip id=[%s]", chip_id);
+  logMsg(logMsgBuffer);
+
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Hostname=[%s]", myhostname);
+  logMsg(logMsgBuffer);
+
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Device id=[%s]", deviceId);
+  logMsg(logMsgBuffer);
 
   // reset if necessary
   // wifiManager.resetSettings();
@@ -113,45 +167,68 @@ void setup()
   wifiManager.setTimeout(3600);
   WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
   wifiManager.addParameter(&custom_mqtt_server);
+
   WiFiManagerParameter custom_password("password", "password for updates", password, 40);
   wifiManager.addParameter(&custom_password);
+
   wifiManager.setCustomHeadElement(chip_id);
-  wifiManager.autoConnect();
+
+  bool wifiConnected = false;
+  logMsg("Wifi not connected");
+
+  setRedLEDOn(false);           // No wifi connection
+  setGreenLEDOn(false);         // No MQTT connection
+
+  while (!wifiConnected) 
+  { 
+    logMsg("Calling wifiManager.autoConnect()");
+    flashRedLED(2);
+
+    wifiConnected = wifiManager.autoConnect();
+
+    if (!wifiConnected) {
+        logMsg("Wifi connect failed. Retrying");
+        delay(1000);
+    }
+  }
+
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Connected IP address=[%s]", WiFi.localIP().toString().c_str());
+  logMsg(logMsgBuffer);
+  setRedLEDOn(true);
 
   mqtt_server = custom_mqtt_server.getValue();
   password = custom_password.getValue();
 
-  Serial1.println("");
-
-  Serial1.println("WiFi connected");
-  Serial1.println("IP address: ");
-  Serial1.println(WiFi.localIP());
-
-  Serial1.println("");
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "MQTT server=[%s]", mqtt_server);
+  logMsg(logMsgBuffer);
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "OTA user=[%s]", username);
+  logMsg(logMsgBuffer);
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "OTA password=[%s]", password);
+  logMsg(logMsgBuffer);
 
   // init the MQTT connection
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(callback);
+  mqttClient.setServer(mqtt_server, 1883);
+  mqttClient.setCallback(callback);
 
-  // replace chip ID in channel names
-  memcpy(MQTT_LIGHT_RGB_STATE_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_RGB_COMMAND_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_RGB_RGB_STATE_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_RGB_RGB_COMMAND_TOPIC, chip_id, 8);
+  // add prefix and chip ID to channel names
+  snprintf(MQTT_UP_TOPIC, sizeof(MQTT_UP_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, "active", deviceId);
 
-  memcpy(MQTT_LIGHT_W1_STATE_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_W1_COMMAND_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_W1_BRIGHTNESS_STATE_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC, chip_id, 8);
+  snprintf(MQTT_LIGHT_RGB_STATE_TOPIC, sizeof(MQTT_LIGHT_RGB_STATE_TOPIC),"%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/light/status");
+  snprintf(MQTT_LIGHT_RGB_COMMAND_TOPIC, sizeof(MQTT_LIGHT_RGB_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/light/command");
+  snprintf(MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC, sizeof(MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/brightness/status");
+  snprintf(MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC, sizeof(MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/brightness/command");
+  snprintf(MQTT_LIGHT_RGB_COLOUR_STATE_TOPIC, sizeof(MQTT_LIGHT_RGB_COLOUR_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/colour/status");
+  snprintf(MQTT_LIGHT_RGB_COLOUR_COMMAND_TOPIC, sizeof(MQTT_LIGHT_RGB_COLOUR_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/colour/command");
 
-  memcpy(MQTT_LIGHT_W2_STATE_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_W2_COMMAND_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC, chip_id, 8);
-  memcpy(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC, chip_id, 8);
+  snprintf(MQTT_LIGHT_W1_STATE_TOPIC, sizeof(MQTT_LIGHT_W1_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w1/light/status");
+  snprintf(MQTT_LIGHT_W1_COMMAND_TOPIC, sizeof(MQTT_LIGHT_W1_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w1/light/command");
+  snprintf(MQTT_LIGHT_W1_BRIGHTNESS_STATE_TOPIC, sizeof(MQTT_LIGHT_W1_BRIGHTNESS_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w1/brightness/status");
+  snprintf(MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC, sizeof(MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w1/brightness/command");
 
-  digitalWrite(RED_PIN, 1);
+  snprintf(MQTT_LIGHT_W2_STATE_TOPIC, sizeof(MQTT_LIGHT_W2_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/light/status");
+  snprintf(MQTT_LIGHT_W2_COMMAND_TOPIC, sizeof(MQTT_LIGHT_W2_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/light/command");
+  snprintf(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC, sizeof(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/brightness/status");
+  snprintf(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC, sizeof(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/brightness/command");
 
   // OTA
   // do not start OTA server if no password has been set
@@ -161,6 +238,8 @@ void setup()
     httpServer.begin();
     MDNS.addService("http", "tcp", 80);
   }
+
+  logMsg("Setup complete");
 }
 
 // function called to adapt the brightness and the colors of the led
@@ -184,57 +263,63 @@ void setW2(uint8_t brightness) {
 // function called to publish the state of the led (on/off)
 void publishRGBState() {
   if (m_rgb_state) {
-    client.publish(MQTT_LIGHT_RGB_STATE_TOPIC, LIGHT_ON, true);
+    mqttClient.publish(MQTT_LIGHT_RGB_STATE_TOPIC, LIGHT_ON, true);
   } else {
-    client.publish(MQTT_LIGHT_RGB_STATE_TOPIC, LIGHT_OFF, true);
+    mqttClient.publish(MQTT_LIGHT_RGB_STATE_TOPIC, LIGHT_OFF, true);
   }
 }
 
 void publishW1State() {
   if (m_w1_state) {
-    client.publish(MQTT_LIGHT_W1_STATE_TOPIC, LIGHT_ON, true);
+    mqttClient.publish(MQTT_LIGHT_W1_STATE_TOPIC, LIGHT_ON, true);
   } else {
-    client.publish(MQTT_LIGHT_W1_STATE_TOPIC, LIGHT_OFF, true);
+    mqttClient.publish(MQTT_LIGHT_W1_STATE_TOPIC, LIGHT_OFF, true);
   }
 }
 
 void publishW2State() {
   if (m_w2_state) {
-    client.publish(MQTT_LIGHT_W2_STATE_TOPIC, LIGHT_ON, true);
+    mqttClient.publish(MQTT_LIGHT_W2_STATE_TOPIC, LIGHT_ON, true);
   } else {
-    client.publish(MQTT_LIGHT_W2_STATE_TOPIC, LIGHT_OFF, true);
+    mqttClient.publish(MQTT_LIGHT_W2_STATE_TOPIC, LIGHT_OFF, true);
   }
 }
 
 // function called to publish the colors of the led (xx(x),xx(x),xx(x))
 void publishRGBColor() {
   snprintf(m_msg_buffer, MSG_BUFFER_SIZE, "%d,%d,%d", m_rgb_red, m_rgb_green, m_rgb_blue);
-  client.publish(MQTT_LIGHT_RGB_RGB_STATE_TOPIC, m_msg_buffer, true);
+  mqttClient.publish(MQTT_LIGHT_RGB_COLOUR_STATE_TOPIC, m_msg_buffer, true);
 }
 
 // function called to publish the brightness of the led (0-100)
 void publishRGBBrightness() {
   snprintf(m_msg_buffer, MSG_BUFFER_SIZE, "%d", m_rgb_brightness);
-  client.publish(MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
+  mqttClient.publish(MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
 }
 
 void publishW1Brightness() {
   snprintf(m_msg_buffer, MSG_BUFFER_SIZE, "%d", m_w1_brightness);
-  client.publish(MQTT_LIGHT_W1_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
+  mqttClient.publish(MQTT_LIGHT_W1_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
 }
 
 void publishW2Brightness() {
   snprintf(m_msg_buffer, MSG_BUFFER_SIZE, "%d", m_w2_brightness);
-  client.publish(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
+  mqttClient.publish(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
 }
 
 // function called when a MQTT message arrived
-void callback(char* p_topic, byte* p_payload, unsigned int p_length) {
+void callback(char* p_topic, byte* p_payload, unsigned int p_length) 
+{
+  flashGreenLED(1);
+
   // concat the payload into a string
   String payload;
   for (uint8_t i = 0; i < p_length; i++) {
     payload.concat((char)p_payload[i]);
   }
+
+  snprintf(logMsgBuffer, sizeof(logMsgBuffer), "mqtt rx [%s] on [%s]", payload.c_str(), p_topic);
+  logMsg(logMsgBuffer);
 
   // handle message topic
   if (String(MQTT_LIGHT_RGB_COMMAND_TOPIC).equals(p_topic)) {
@@ -300,7 +385,7 @@ void callback(char* p_topic, byte* p_payload, unsigned int p_length) {
       setW2(m_w2_brightness);
       publishW2Brightness();
     }
-  } else if (String(MQTT_LIGHT_RGB_RGB_COMMAND_TOPIC).equals(p_topic)) {
+  } else if (String(MQTT_LIGHT_RGB_COLOUR_COMMAND_TOPIC).equals(p_topic)) {
     // get the position of the first and second commas
     uint8_t firstIndex = payload.indexOf(',');
     uint8_t lastIndex = payload.lastIndexOf(',');
@@ -329,21 +414,22 @@ void callback(char* p_topic, byte* p_payload, unsigned int p_length) {
     setColor(m_rgb_red, m_rgb_green, m_rgb_blue);
     publishRGBColor();
   }
-
-  digitalWrite(GREEN_PIN, 0);
-  delay(1);
-  digitalWrite(GREEN_PIN, 1);
 }
 
 void reconnect() {
   // Loop until we're reconnected
-  while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    // Attempt to connect
-    if (client.connect(chip_id)) {
-      Serial.println("connected");
+  while (!mqttClient.connected()) {
+    setGreenLEDOn(false);   
 
-      client.publish(MQTT_UP, chip_id);
+    logMsg("Attempting MQTT connection...");
+    flashGreenLED(3); 
+
+    // Attempt to connect
+    if (mqttClient.connect(deviceId)) {
+      logMsg("Connected");
+      setGreenLEDOn(true);
+
+      mqttClient.publish(MQTT_UP_TOPIC, "1");
 
       // Once connected, publish an announcement...
       // publish the initial values
@@ -358,22 +444,21 @@ void reconnect() {
       publishW2Brightness();
 
       // ... and resubscribe
-      client.subscribe(MQTT_LIGHT_RGB_COMMAND_TOPIC);
-      client.subscribe(MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC);
-      client.subscribe(MQTT_LIGHT_RGB_RGB_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_RGB_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_RGB_COLOUR_COMMAND_TOPIC);
 
-      client.subscribe(MQTT_LIGHT_W1_COMMAND_TOPIC);
-      client.subscribe(MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_W1_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC);
 
-      client.subscribe(MQTT_LIGHT_W2_COMMAND_TOPIC);
-      client.subscribe(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_W2_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC);
 
     } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
+      snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Failed to connect to mqtt server - mqtt.connect() rc=[%d]", mqttClient.state());
+      logMsg(logMsgBuffer);
+      logMsg("Waiting two seconds to reconnect");
+      delay(2000);
     }
   }
 }
@@ -386,10 +471,10 @@ void loop()
   httpServer.handleClient();
   
   i++;
-  if (!client.connected()) {
+  if (!mqttClient.connected()) {
     reconnect();
   }
-  client.loop();
+  mqttClient.loop();
 
   // Post the full status to MQTT every 65535 cycles. This is roughly once a minute
   // this isn't exact, but it doesn't have to be. Usually, clients will store the value
@@ -397,6 +482,8 @@ void loop()
   // previous messages
   delay(1);
   if (i == 0) {
+    flashGreenLED(2);
+
     publishRGBState();
     publishRGBBrightness();
     publishRGBColor();
