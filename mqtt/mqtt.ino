@@ -28,7 +28,7 @@ const char* mqtt_server = "192.168.0.57";
 
 // Password for update server
 const char* username = "admin";
-const char* password = "";
+const char* password = "charlie";
 
 // MQTT topics
 // state, brightness, rgb
@@ -90,9 +90,10 @@ boolean m_w2_state = false;
 uint8_t m_w2_brightness = 255;
 
 // Useful buffer and function for logging
-#define LOG_MSG_BUFFER_SIZE 64
-char logMsgBuffer[64];
-void logMsg(char* msg) {
+#define LOG_MSG_BUFFER_SIZE 128
+char logMsgBuffer[LOG_MSG_BUFFER_SIZE];
+
+void logMsg(const char* msg) {
     Serial1.println(msg);
 }
 
@@ -123,6 +124,24 @@ void flashGreenLED(int numTimes) {
 
 void flashRedLED(int numTimes) {
     flashDebugLED(RED_PIN, numTimes, redLEDState);
+}
+
+bool checkHTTPRequestPassword() {
+    bool rc = false;
+
+    String subPassword = httpServer.arg("password");
+
+    if (strlen(password) == 0) {
+        httpServer.send(401, "text/plain", "Operation not allowed: no password set on server");
+        rc = false;
+    } else if (strcmp(password, subPassword.c_str()) != 0) {
+        httpServer.send(401, "text/plain", "Invalid password");
+        rc = false;
+    } else {
+        rc = true;
+    }
+
+    return rc;
 }
 
 void setup()
@@ -160,9 +179,6 @@ void setup()
 
   snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Device id=[%s]", deviceId);
   logMsg(logMsgBuffer);
-
-  // reset if necessary
-  // wifiManager.resetSettings();
 
   wifiManager.setTimeout(3600);
   WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
@@ -230,13 +246,67 @@ void setup()
   snprintf(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC, sizeof(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/brightness/status");
   snprintf(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC, sizeof(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/brightness/command");
 
-  // OTA
-  // do not start OTA server if no password has been set
-  if ((strlen!=NULL) && (strlen(password)!=0)) {
+  // Setup HTTP server URLs for browser control
+  logMsg("Starting HTTP server");
+
+  httpServer.on("/", []() {
+      flashRedLED(2);
+      httpServer.send(200, "text/html",   "<html>"
+                                          "<p>This is an index page</p>"
+                                          "<p>Commands available are : </p>"
+                                          "<ul>"
+                                          " <li>Reset - /reset?password=password</li>"
+                                          "   <ul><li>Resets the device</li></ul>"
+                                          " <li>ResetWifiMgr - /resetwifimgr?password=password</li>"
+                                          "   <ul><li>Resets the Wifi Manager settings and resets the device</li></ul>"
+                                          "</ul>"
+                                          "</html>");
+  });
+
+  httpServer.on("/reset", []() {
+      flashRedLED(1);
+      logMsg("HTTP req for /reset");
+
+      if (checkHTTPRequestPassword()) {
+          const char* msg = "Resetting device ...";
+          httpServer.send(200, "text/plain", msg);
+          logMsg(msg);
+          delay(1000);
+          ESP.reset();
+      }
+  });
+
+  httpServer.on("/resetwifimgr", []() {
+      flashRedLED(1);
+      logMsg("HTTP req for /resetwifimgr");
+
+      if (checkHTTPRequestPassword()) {
+          const char* msg = "Resetting WiFi manager config and resetting device ...";
+          httpServer.send(200, "text/plain", msg);
+          logMsg(msg);
+          delay(1000);
+
+          wifiManager.resetSettings();
+          delay(200);
+          ESP.reset();
+      }
+  });
+
+
+  httpServer.begin();
+
+  logMsg("HTTP server started");
+
+  // do not start the OTA server if no password has been set
+  if (strlen(password)!=0) 
+  {
     MDNS.begin(myhostname);
-    httpUpdater.setup(&httpServer,username,password);
-    httpServer.begin();
     MDNS.addService("http", "tcp", 80);
+    httpUpdater.setup(&httpServer, username, password);
+    logMsg("OTA started ");
+  }
+  else {
+    logMsg("OTA not started as not password set");
   }
 
   logMsg("Setup complete");
@@ -424,8 +494,8 @@ void reconnect() {
     logMsg("Attempting MQTT connection...");
     flashGreenLED(3); 
 
-    // Attempt to connect
-    if (mqttClient.connect(deviceId)) {
+    // Attempt to connect - set LWT
+    if (mqttClient.connect(deviceId, MQTT_UP_TOPIC, 2, true, "0")) {
       logMsg("Connected");
       setGreenLEDOn(true);
 
@@ -472,7 +542,10 @@ void loop()
   
   i++;
   if (!mqttClient.connected()) {
-    reconnect();
+      snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "MQTT not connected state=[%d]", mqttClient.state());
+      logMsg(logMsgBuffer);
+
+      reconnect();
   }
   mqttClient.loop();
 
@@ -482,7 +555,7 @@ void loop()
   // previous messages
   delay(1);
   if (i == 0) {
-    flashGreenLED(2);
+    flashRedLED(1);
 
     publishRGBState();
     publishRGBBrightness();
