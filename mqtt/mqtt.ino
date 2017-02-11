@@ -2,6 +2,12 @@
 // Alternative firmware for H801 5 channel LED dimmer
 // based on https://github.com/mertenats/open-home-automation/blob/master/ha_mqtt_rgb_light/ha_mqtt_rgb_light.ino
 //
+//:TODO
+//   Switch to a MQTT library that supports QoS on publish maybe AdaFruit
+//   Save last setting for lights and restore on power up
+
+#include <FS.h>                   //this needs to be first, or it all crashes and burns...
+
 #include <string>
 
 #include <ESP8266WiFi.h>
@@ -12,6 +18,7 @@
 #include <PubSubClient.h>       // MQTT client
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
+#include <ArduinoJson.h>        
 
 #define DEVELOPMENT
 
@@ -20,6 +27,9 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 ESP8266WebServer httpServer(80);
 ESP8266HTTPUpdateServer httpUpdater;
+
+bool lightSettingsChanged;
+#define LIGHT_SETTING_FILENAME "/config.json"
 
 bool greenLEDState;
 bool redLEDState;
@@ -35,7 +45,7 @@ const char* password = "charlie";
 const char* MQTT_TOPIC_PREFIX = "devices";
 
 #define MAX_TOPIC_SIZE 64
-char MQTT_UP_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_ACTIVE_TOPIC[MAX_TOPIC_SIZE];
 char MQTT_LIGHT_RGB_STATE_TOPIC[MAX_TOPIC_SIZE];
 char MQTT_LIGHT_RGB_COMMAND_TOPIC[MAX_TOPIC_SIZE];
 char MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC[MAX_TOPIC_SIZE];
@@ -52,6 +62,17 @@ char MQTT_LIGHT_W2_STATE_TOPIC[MAX_TOPIC_SIZE];
 char MQTT_LIGHT_W2_COMMAND_TOPIC[MAX_TOPIC_SIZE];
 char MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC[MAX_TOPIC_SIZE];
 char MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC[MAX_TOPIC_SIZE];
+
+char MQTT_INFO_TOPIC[MAX_TOPIC_SIZE];
+char MQTT_IP_TOPIC[MAX_TOPIC_SIZE];
+
+char IP_ADDRESS[32];
+
+// PubSubClient.h only supports publishing at QoS = 0 i.e. "fire and forget"
+
+int lwtQoS = 0;
+int publishQoS = 0;    
+int subscribeQoS = 1;  
 
 char* chip_id = "00000000";
 char* myhostname = "H801-00000000";
@@ -153,15 +174,19 @@ void setup()
   logMsg("");
   logMsg("Setting up");
 
+  // Start with all of the lights OFF
   pinMode(RGB_LIGHT_RED_PIN, OUTPUT);
   pinMode(RGB_LIGHT_GREEN_PIN, OUTPUT);
   pinMode(RGB_LIGHT_BLUE_PIN, OUTPUT);
   setColor(0, 0, 0);
+
   pinMode(W1_PIN, OUTPUT);
   setW1(0);
+  
   pinMode(W2_PIN, OUTPUT);
   setW2(0);
 
+  // Setup indicator leds
   pinMode(GREEN_PIN, OUTPUT);
   pinMode(RED_PIN, OUTPUT);
   setRedLEDOn(false);
@@ -208,7 +233,8 @@ void setup()
     }
   }
 
-  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Connected IP address=[%s]", WiFi.localIP().toString().c_str());
+  snprintf(IP_ADDRESS, sizeof(IP_ADDRESS), "%s", WiFi.localIP().toString().c_str());
+  snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Connected IP address=[%s]", IP_ADDRESS);
   logMsg(logMsgBuffer);
   setRedLEDOn(true);
 
@@ -227,7 +253,7 @@ void setup()
   mqttClient.setCallback(callback);
 
   // add prefix and chip ID to channel names
-  snprintf(MQTT_UP_TOPIC, sizeof(MQTT_UP_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, "active", deviceId);
+  snprintf(MQTT_ACTIVE_TOPIC, sizeof(MQTT_ACTIVE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, "active", deviceId);
 
   snprintf(MQTT_LIGHT_RGB_STATE_TOPIC, sizeof(MQTT_LIGHT_RGB_STATE_TOPIC),"%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/light/status");
   snprintf(MQTT_LIGHT_RGB_COMMAND_TOPIC, sizeof(MQTT_LIGHT_RGB_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "rgb/light/command");
@@ -245,6 +271,10 @@ void setup()
   snprintf(MQTT_LIGHT_W2_COMMAND_TOPIC, sizeof(MQTT_LIGHT_W2_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/light/command");
   snprintf(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC, sizeof(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/brightness/status");
   snprintf(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC, sizeof(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "w2/brightness/command");
+
+  snprintf(MQTT_IP_TOPIC, sizeof(MQTT_IP_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "ipaddr");
+
+  snprintf(MQTT_INFO_TOPIC, sizeof(MQTT_INFO_TOPIC), "%s/%s/%s", MQTT_TOPIC_PREFIX, deviceId, "info");
 
   // Setup HTTP server URLs for browser control
   logMsg("Starting HTTP server");
@@ -309,6 +339,67 @@ void setup()
     logMsg("OTA not started as not password set");
   }
 
+  // Load previously saved state
+  logMsg("mounting FS...");
+
+  if (SPIFFS.begin()) {
+      logMsg("mounted file system");
+
+      if (SPIFFS.exists("/config.json")) {
+          //file exists, reading and loading
+          logMsg("reading config file");
+          File configFile = SPIFFS.open(LIGHT_SETTING_FILENAME, "r");
+
+          if (configFile) {
+              Serial.println("opened config file");
+              size_t size = configFile.size();
+
+              // Allocate a buffer to store contents of the file.
+              std::unique_ptr<char[]> buf(new char[size]);
+
+              configFile.readBytes(buf.get(), size);
+
+              DynamicJsonBuffer jsonBuffer;
+              JsonObject& json = jsonBuffer.parseObject(buf.get());
+              json.printTo(Serial1);
+
+              if (json.success()) {
+                  logMsg("\nparsed json");
+
+                  m_rgb_state = json["rgb.state"];
+                  m_rgb_red = json["rgb.colour.red"];
+                  m_rgb_green = json["rgb.colour.green"];
+                  m_rgb_blue = json["rgb.colour.blue"];
+                  
+                  m_w1_state = json["w1.state"];
+                  m_w1_brightness = json["w1.brightness"];
+                  
+                  m_w2_state = json["w2.state"];
+                  m_w2_brightness = json["w2.brightness"];
+
+                  // Set any lights which are ON
+                  if (m_rgb_state==true) { setColor(m_rgb_red, m_rgb_green, m_rgb_blue); }
+                  if (m_w1_state==true) { setW1(m_w1_brightness); }
+                  if (m_w2_state==true) { setW2(m_w2_brightness); }
+              }
+              else {
+                  logMsg("failed to parse json config");
+              }  // parse end
+          }
+          else {
+              logMsg("failed to read config file");
+          } // read end
+      }
+      else {
+          logMsg("no config file found");
+      } // open end
+  }
+  else {
+      Serial.println("failed to mount FS");
+  } // mount read
+
+  lightSettingsChanged = false;
+
   logMsg("Setup complete");
 }
 
@@ -318,7 +409,6 @@ void setColor(uint8_t p_red, uint8_t p_green, uint8_t p_blue) {
   analogWrite(RGB_LIGHT_GREEN_PIN, map(p_green, 0, 255, 0, m_rgb_brightness));
   analogWrite(RGB_LIGHT_BLUE_PIN, map(p_blue, 0, 255, 0, m_rgb_brightness));
 }
-
 
 void setW1(uint8_t brightness) {
   // convert the brightness in % (0-100%) into a digital value (0-255)
@@ -375,6 +465,46 @@ void publishW1Brightness() {
 void publishW2Brightness() {
   snprintf(m_msg_buffer, MSG_BUFFER_SIZE, "%d", m_w2_brightness);
   mqttClient.publish(MQTT_LIGHT_W2_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
+}
+
+void publishActive() {
+    mqttClient.publish(MQTT_ACTIVE_TOPIC, "1", true);  // We're alive!
+}
+
+void publishInfo() {
+    mqttClient.publish(MQTT_IP_TOPIC, IP_ADDRESS, true);
+}
+
+
+void saveLightingSetting() {
+    if (lightSettingsChanged) {
+        logMsg("Saving lighting setting");
+
+        StaticJsonBuffer<200> jsonBuffer;
+        JsonObject& json = jsonBuffer.createObject();
+
+        json["rgb.state"] = m_rgb_state;
+        json["rgb.colour.red"] = m_rgb_red;
+        json["rgb.colour.green"] = m_rgb_green;
+        json["rgb.colour.blue"] = m_rgb_blue;
+
+        json["w1.state"] = m_w1_state;
+        json["w1.brightness"] = m_w1_brightness;
+
+        json["w2.state"] = m_w2_state;
+        json["w2.brightness"] = m_w2_brightness;
+
+        File configFile = SPIFFS.open(LIGHT_SETTING_FILENAME, "w");
+        if (!configFile) {
+            logMsg("Failed to open config file for writing");
+        } 
+        else {
+            json.printTo(configFile);
+            logMsg("Saved  lighting setting");
+        }
+
+        lightSettingsChanged = false;
+    }
 }
 
 // function called when a MQTT message arrived
@@ -484,6 +614,8 @@ void callback(char* p_topic, byte* p_payload, unsigned int p_length)
     setColor(m_rgb_red, m_rgb_green, m_rgb_blue);
     publishRGBColor();
   }
+
+  lightSettingsChanged = true;
 }
 
 void reconnect() {
@@ -494,14 +626,15 @@ void reconnect() {
     logMsg("Attempting MQTT connection...");
     flashGreenLED(3); 
 
-    // Attempt to connect - set LWT
-    if (mqttClient.connect(deviceId, MQTT_UP_TOPIC, 2, true, "0")) {
+    // Attempt to connect - set LWT to post to active topic
+    if (mqttClient.connect(deviceId, MQTT_ACTIVE_TOPIC, lwtQoS, true, "0")) {
       logMsg("Connected");
       setGreenLEDOn(true);
 
-      mqttClient.publish(MQTT_UP_TOPIC, "1");
-
       // Once connected, publish an announcement...
+      publishActive();
+      publishInfo();
+
       // publish the initial values
       publishRGBState();
       publishRGBBrightness();
@@ -514,15 +647,15 @@ void reconnect() {
       publishW2Brightness();
 
       // ... and resubscribe
-      mqttClient.subscribe(MQTT_LIGHT_RGB_COMMAND_TOPIC);
-      mqttClient.subscribe(MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC);
-      mqttClient.subscribe(MQTT_LIGHT_RGB_COLOUR_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_RGB_COMMAND_TOPIC, subscribeQoS);
+      mqttClient.subscribe(MQTT_LIGHT_RGB_BRIGHTNESS_COMMAND_TOPIC, subscribeQoS);
+      mqttClient.subscribe(MQTT_LIGHT_RGB_COLOUR_COMMAND_TOPIC, subscribeQoS);
 
-      mqttClient.subscribe(MQTT_LIGHT_W1_COMMAND_TOPIC);
-      mqttClient.subscribe(MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_W1_COMMAND_TOPIC, subscribeQoS);
+      mqttClient.subscribe(MQTT_LIGHT_W1_BRIGHTNESS_COMMAND_TOPIC, subscribeQoS);
 
-      mqttClient.subscribe(MQTT_LIGHT_W2_COMMAND_TOPIC);
-      mqttClient.subscribe(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC);
+      mqttClient.subscribe(MQTT_LIGHT_W2_COMMAND_TOPIC, subscribeQoS);
+      mqttClient.subscribe(MQTT_LIGHT_W2_BRIGHTNESS_COMMAND_TOPIC, subscribeQoS);
 
     } else {
       snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Failed to connect to mqtt server - mqtt.connect() rc=[%d]", mqttClient.state());
@@ -547,6 +680,7 @@ void loop()
 
       reconnect();
   }
+
   mqttClient.loop();
 
   // Post the full status to MQTT every 65535 cycles. This is roughly once a minute
@@ -564,5 +698,10 @@ void loop()
     publishW1Brightness();
     publishW2State();
     publishW2Brightness();
+
+    publishInfo();
+    publishActive();
+
+    saveLightingSetting();  // Save setting if they have been changed
   }
 }
