@@ -10,8 +10,17 @@ Todo
 ========================================================================================
 Notes
 ========================================================================================
-		
+Reflashing
+    On board the labelling for rx and tx are from the programmer point of view i.e. connect Tx to Tx and Rx to Rx
+    Need to add to jumper J3
+	Serial speed is set to 57600
 
+Remove jumper and reboot
+H801 starts an AP 
+Connect to it using mobile phone and setup config
+You may need to try this a few time
+If successfull the red and green leds should both be lit
+Seems to take a long time to present the web page and save config - may need to leave it a while
 		
 ========================================================================================
 Log
