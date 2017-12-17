@@ -4,9 +4,10 @@ Todo
 ========================================================================================
 - publish info messages out onto INFO topic
 - replace PubSubClient with AdaFruit MQTT lib and set publishes to QoS = 1
-	
+- try changing some options on PWM (freq) and a different PWM implementation to reduce hum
+    - https://lurchi.wordpress.com/2016/06/29/esp8266-pwm-revisited-and-reimplemented/
+    - https://github.com/StefanBruens/ESP8266_new_pwm
 
-	
 ========================================================================================
 Notes
 ========================================================================================
