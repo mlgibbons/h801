@@ -5,6 +5,9 @@
 //:TODO
 //   Switch to a MQTT library that supports QoS on publish maybe AdaFruit
 //   Save last setting for lights and restore on power up
+//   Change to using PWMRANGE and analogWriteRange
+//   Add ability to change default power on mode for LEDs
+//      If the system turns the lights into OFF mode then a power cycle can then put them back into ON mode  
 
 #include <FS.h>                   //this needs to be first, or it all crashes and burns...
 
@@ -97,6 +100,10 @@ const char* LIGHT_OFF = "OFF";
 #define GREEN_PIN    1
 #define RED_PIN      5
 
+// max analog value
+#define MAX_ANALOGUE_VALUE 1023
+#define MAX_ANALOGUE_SCALE_FACTOR 4
+
 // store the state of the rgb light (colors, brightness, ...)
 boolean m_rgb_state = false;
 uint8_t m_rgb_brightness = 255;
@@ -186,6 +193,8 @@ void setup()
   pinMode(W2_PIN, OUTPUT);
   setW2(0);
 
+  //analogWriteFreq(8000);
+
   // Setup indicator leds
   pinMode(GREEN_PIN, OUTPUT);
   pinMode(RED_PIN, OUTPUT);
@@ -204,6 +213,67 @@ void setup()
 
   snprintf(logMsgBuffer, LOG_MSG_BUFFER_SIZE, "Device id=[%s]", deviceId);
   logMsg(logMsgBuffer);
+
+
+  // Load previously saved state
+  logMsg("mounting FS...");
+
+  if (SPIFFS.begin()) {
+      logMsg("mounted file system");
+
+      if (SPIFFS.exists("/config.json")) {
+          //file exists, reading and loading
+          logMsg("reading config file");
+          File configFile = SPIFFS.open(LIGHT_SETTING_FILENAME, "r");
+
+          if (configFile) {
+              Serial.println("opened config file");
+              size_t size = configFile.size();
+
+              // Allocate a buffer to store contents of the file.
+              std::unique_ptr<char[]> buf(new char[size]);
+
+              configFile.readBytes(buf.get(), size);
+
+              DynamicJsonBuffer jsonBuffer;
+              JsonObject& json = jsonBuffer.parseObject(buf.get());
+              json.printTo(Serial1);
+
+              if (json.success()) {
+                  logMsg("\nparsed json");
+
+                  m_rgb_state = json["rgb.state"];
+                  m_rgb_red = json["rgb.colour.red"];
+                  m_rgb_green = json["rgb.colour.green"];
+                  m_rgb_blue = json["rgb.colour.blue"];
+                  
+                  m_w1_state = json["w1.state"];
+                  m_w1_brightness = json["w1.brightness"];
+                  
+                  m_w2_state = json["w2.state"];
+                  m_w2_brightness = json["w2.brightness"];
+
+                  // Set any lights which are ON
+                  if (m_rgb_state==true) { setColor(m_rgb_red, m_rgb_green, m_rgb_blue); }
+                  if (m_w1_state==true) { setW1(m_w1_brightness); }
+                  if (m_w2_state==true) { setW2(m_w2_brightness); }
+              }
+              else {
+                  logMsg("failed to parse json config");
+              }  // parse end
+          }
+          else {
+              logMsg("failed to read config file");
+          } // read end
+      }
+      else {
+          logMsg("no config file found");
+      } // open end
+  }
+  else {
+      Serial.println("failed to mount FS");
+  } // mount read
+
 
   wifiManager.setTimeout(3600);
   WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
@@ -339,64 +409,6 @@ void setup()
     logMsg("OTA not started as not password set");
   }
 
-  // Load previously saved state
-  logMsg("mounting FS...");
-
-  if (SPIFFS.begin()) {
-      logMsg("mounted file system");
-
-      if (SPIFFS.exists("/config.json")) {
-          //file exists, reading and loading
-          logMsg("reading config file");
-          File configFile = SPIFFS.open(LIGHT_SETTING_FILENAME, "r");
-
-          if (configFile) {
-              Serial.println("opened config file");
-              size_t size = configFile.size();
-
-              // Allocate a buffer to store contents of the file.
-              std::unique_ptr<char[]> buf(new char[size]);
-
-              configFile.readBytes(buf.get(), size);
-
-              DynamicJsonBuffer jsonBuffer;
-              JsonObject& json = jsonBuffer.parseObject(buf.get());
-              json.printTo(Serial1);
-
-              if (json.success()) {
-                  logMsg("\nparsed json");
-
-                  m_rgb_state = json["rgb.state"];
-                  m_rgb_red = json["rgb.colour.red"];
-                  m_rgb_green = json["rgb.colour.green"];
-                  m_rgb_blue = json["rgb.colour.blue"];
-                  
-                  m_w1_state = json["w1.state"];
-                  m_w1_brightness = json["w1.brightness"];
-                  
-                  m_w2_state = json["w2.state"];
-                  m_w2_brightness = json["w2.brightness"];
-
-                  // Set any lights which are ON
-                  if (m_rgb_state==true) { setColor(m_rgb_red, m_rgb_green, m_rgb_blue); }
-                  if (m_w1_state==true) { setW1(m_w1_brightness); }
-                  if (m_w2_state==true) { setW2(m_w2_brightness); }
-              }
-              else {
-                  logMsg("failed to parse json config");
-              }  // parse end
-          }
-          else {
-              logMsg("failed to read config file");
-          } // read end
-      }
-      else {
-          logMsg("no config file found");
-      } // open end
-  }
-  else {
-      Serial.println("failed to mount FS");
-  } // mount read
 
   lightSettingsChanged = false;
 
@@ -405,19 +417,17 @@ void setup()
 
 // function called to adapt the brightness and the colors of the led
 void setColor(uint8_t p_red, uint8_t p_green, uint8_t p_blue) {
-  analogWrite(RGB_LIGHT_RED_PIN, map(p_red, 0, 255, 0, m_rgb_brightness));
-  analogWrite(RGB_LIGHT_GREEN_PIN, map(p_green, 0, 255, 0, m_rgb_brightness));
-  analogWrite(RGB_LIGHT_BLUE_PIN, map(p_blue, 0, 255, 0, m_rgb_brightness));
+  analogWrite(RGB_LIGHT_RED_PIN, map(p_red, 0, 255, 0, m_rgb_brightness * MAX_ANALOGUE_SCALE_FACTOR));
+  analogWrite(RGB_LIGHT_GREEN_PIN, map(p_green, 0, 255, 0, m_rgb_brightness * MAX_ANALOGUE_SCALE_FACTOR));
+  analogWrite(RGB_LIGHT_BLUE_PIN, map(p_blue, 0, 255, 0, m_rgb_brightness * MAX_ANALOGUE_SCALE_FACTOR));
 }
 
 void setW1(uint8_t brightness) {
-  // convert the brightness in % (0-100%) into a digital value (0-255)
-  analogWrite(W1_PIN, brightness);
+  analogWrite(W1_PIN, map(brightness, 0, 255, 0, MAX_ANALOGUE_VALUE));
 }
 
 void setW2(uint8_t brightness) {
-  // convert the brightness in % (0-100%) into a digital value (0-255)
-  analogWrite(W2_PIN, brightness);
+  analogWrite(W2_PIN, map(brightness, 0, 255, 0, MAX_ANALOGUE_VALUE));
 }
 
 // function called to publish the state of the led (on/off)
@@ -451,7 +461,7 @@ void publishRGBColor() {
   mqttClient.publish(MQTT_LIGHT_RGB_COLOUR_STATE_TOPIC, m_msg_buffer, true);
 }
 
-// function called to publish the brightness of the led (0-100)
+// function called to publish the brightness of the led (0-255)
 void publishRGBBrightness() {
   snprintf(m_msg_buffer, MSG_BUFFER_SIZE, "%d", m_rgb_brightness);
   mqttClient.publish(MQTT_LIGHT_RGB_BRIGHTNESS_STATE_TOPIC, m_msg_buffer, true);
@@ -683,12 +693,13 @@ void loop()
 
   mqttClient.loop();
 
-  // Post the full status to MQTT every 65535 cycles. This is roughly once a minute
-  // this isn't exact, but it doesn't have to be. Usually, clients will store the value
+  // Post the full status to MQTT every 10 seconds and save the current settings.
+  // Usually, clients will store the value
   // internally. This is only used if a client starts up again and did not receive
   // previous messages
   delay(1);
-  if (i == 0) {
+  if (i > 10000) {
+    i = 0;
     flashRedLED(1);
 
     publishRGBState();
