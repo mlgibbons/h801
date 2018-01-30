@@ -4,10 +4,18 @@
 //
 //:TODO
 //   Switch to a MQTT library that supports QoS on publish maybe AdaFruit
-//   Save last setting for lights and restore on power up
-//   Change to using PWMRANGE and analogWriteRange
 //   Add ability to change default power on mode for LEDs
 //      If the system turns the lights into OFF mode then a power cycle can then put them back into ON mode  
+//      New sketch in repo but seems to cause MQTT connection to be unreliable (weird) - see below
+//
+//:NOTES
+//   Seems unreliable in connections etc if OTA enabled - maybe due to memory pressure?
+//      At one point went into infinite reboot loop until I reduced the memory in use size 
+//      Also saw very unreliable MQTT connection when added code for default power on feature
+//      See last comment here - https://github.com/esp8266/Arduino/issues/1671
+//
+//   H801 should be programmed using 1M/64K SPIFFS
+// 
 
 #include <FS.h>                   //this needs to be first, or it all crashes and burns...
 
@@ -15,21 +23,27 @@
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>   // Local WebServer used to serve the configuration portal
-#include <ESP8266mDNS.h>
-#include <ESP8266HTTPUpdateServer.h>
 #include <WiFiManager.h>        // WiFi Configuration Magic
 #include <PubSubClient.h>       // MQTT client
 #include <WiFiUdp.h>
-#include <ArduinoOTA.h>
 #include <ArduinoJson.h>        
 
-#define DEVELOPMENT
+//#define ENABLE_OTA
+
+#ifdef ENABLE_OTA
+#include <ESP8266mDNS.h>
+#include <ESP8266HTTPUpdateServer.h>
+#include <ArduinoOTA.h>
+#endif
 
 WiFiManager wifiManager;
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 ESP8266WebServer httpServer(80);
+
+#ifdef ENABLE_OTA
 ESP8266HTTPUpdateServer httpUpdater;
+#endif
 
 bool lightSettingsChanged;
 #define LIGHT_SETTING_FILENAME "/config.json"
@@ -99,10 +113,6 @@ const char* LIGHT_OFF = "OFF";
 
 #define GREEN_PIN    1
 #define RED_PIN      5
-
-// max analog value
-#define MAX_ANALOGUE_VALUE 1023
-#define MAX_ANALOGUE_SCALE_FACTOR 4
 
 // store the state of the rgb light (colors, brightness, ...)
 boolean m_rgb_state = false;
@@ -185,12 +195,12 @@ void setup()
   pinMode(RGB_LIGHT_RED_PIN, OUTPUT);
   pinMode(RGB_LIGHT_GREEN_PIN, OUTPUT);
   pinMode(RGB_LIGHT_BLUE_PIN, OUTPUT);
-  setColor(0, 0, 0);
-
   pinMode(W1_PIN, OUTPUT);
-  setW1(0);
-  
   pinMode(W2_PIN, OUTPUT);
+  
+  analogWriteRange(255);
+  setColor(0, 0, 0);
+  setW1(0);
   setW2(0);
 
   //analogWriteFreq(8000);
@@ -356,9 +366,11 @@ void setup()
                                           "<p>Commands available are : </p>"
                                           "<ul>"
                                           " <li>Reset - /reset?password=password</li>"
-                                          "   <ul><li>Resets the device</li></ul>"
+                                          "   <ul><li>Reboots the device</li></ul>"
                                           " <li>ResetWifiMgr - /resetwifimgr?password=password</li>"
-                                          "   <ul><li>Resets the Wifi Manager settings and resets the device</li></ul>"
+                                          "   <ul><li>Resets the Wifi Manager settings and reboots the device</li></ul>"
+                                          " <li>OTA Update - /update</li>"
+                                          "   <ul><li>Update the firmware OTA</li></ul>"
                                           "</ul>"
                                           "</html>");
   });
@@ -397,6 +409,7 @@ void setup()
 
   logMsg("HTTP server started");
 
+  #ifdef ENABLE_OTA
   // do not start the OTA server if no password has been set
   if (strlen(password)!=0) 
   {
@@ -408,8 +421,8 @@ void setup()
   else {
     logMsg("OTA not started as not password set");
   }
-
-
+  #endif
+  
   lightSettingsChanged = false;
 
   logMsg("Setup complete");
@@ -417,17 +430,17 @@ void setup()
 
 // function called to adapt the brightness and the colors of the led
 void setColor(uint8_t p_red, uint8_t p_green, uint8_t p_blue) {
-  analogWrite(RGB_LIGHT_RED_PIN, map(p_red, 0, 255, 0, m_rgb_brightness * MAX_ANALOGUE_SCALE_FACTOR));
-  analogWrite(RGB_LIGHT_GREEN_PIN, map(p_green, 0, 255, 0, m_rgb_brightness * MAX_ANALOGUE_SCALE_FACTOR));
-  analogWrite(RGB_LIGHT_BLUE_PIN, map(p_blue, 0, 255, 0, m_rgb_brightness * MAX_ANALOGUE_SCALE_FACTOR));
+  analogWrite(RGB_LIGHT_RED_PIN, map(p_red, 0, 255, 0, m_rgb_brightness));
+  analogWrite(RGB_LIGHT_GREEN_PIN, map(p_green, 0, 255, 0, m_rgb_brightness));
+  analogWrite(RGB_LIGHT_BLUE_PIN, map(p_blue, 0, 255, 0, m_rgb_brightness));
 }
 
 void setW1(uint8_t brightness) {
-  analogWrite(W1_PIN, map(brightness, 0, 255, 0, MAX_ANALOGUE_VALUE));
+  analogWrite(W1_PIN, brightness);
 }
 
 void setW2(uint8_t brightness) {
-  analogWrite(W2_PIN, map(brightness, 0, 255, 0, MAX_ANALOGUE_VALUE));
+  analogWrite(W2_PIN, brightness);
 }
 
 // function called to publish the state of the led (on/off)
